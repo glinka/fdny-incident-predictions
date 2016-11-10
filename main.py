@@ -3,6 +3,8 @@ import os.path
 import zipfile
 import pandas as pd
 import numpy as np
+from sklearn import linear_model
+from scipy.stats import ks_2samp
 import matplotlib.pyplot as plt
 
 def analyze_data():
@@ -22,36 +24,46 @@ def analyze_data():
                                   "last_unit_cleared_date_time,"
                                   "highest_level_desc,"
                                   "total_incident_duration,"
-                                  "action_taken1_desc"
-                                  "zip_code"
+                                  "action_taken1_desc,"
+                                  "zip_code,"
                                   "borough_desc")
 
-        clss = ["im_incident_key",
-                                  "fire_box",
-                                  "incident_type_desc",
-                                  "incident_date_time",
-                                  "arrival_date_time",
-                                  "units_onscene",
-                                  "last_unit_cleared_date_time",
-                                  "highest_level_desc",
-                                  "total_incident_duration",
-                                  "action_taken1_desc",
-                                  "zip_code",
-                                  "borough_desc"]
-
-        soda_query = soda_endpoint + '?$select=' + data_columns_to_dl
+        soda_query = soda_endpoint + '?$select=' + data_columns_to_dl + '&$where=units_onscene>"1"' + '&$limit=1000'
 
         # download and read json
         data = pd.read_json(soda_query)
         # save by csv
-        data.to_csv(filename)
+        data.to_csv(filename, index=False)
 
     else:
-        data = pd.read_csv(filename, parse_dates=[4,5,7], infer_datetime_format=True)
+        data = pd.read_csv(filename) # , parse_dates=[4,5,7], infer_datetime_format=True)
+        for column in data.columns:
+            if 'time' in column:
+                data[column] = pd.to_datetime(data[column])
 
-    # # look at response times by borough
+    np.set_printoptions(precision=4)
+
+    # # # look at response times by borough
     data['response_times'] = (data['arrival_date_time'] - data['incident_date_time']).astype('timedelta64[s]')
 
+    data_by_borough = data.groupby('borough_desc')
+    nboroughs = data_by_borough.ngroups
+
+    ks_statistics = np.empty((nboroughs, nboroughs))
+    p_vals = np.empty((nboroughs, nboroughs))
+
+    for i, (borough_name, borough) in enumerate(data_by_borough):
+        for j, (borough_name2, borough2) in enumerate(data_by_borough):
+            ks_statistic = ks_2samp(borough['response_times'], borough2['response_times'])
+            ks_statistics[i,j] = ks_statistic[0]
+            p_vals[i,j] = ks_statistic[1]
+    print 'Pairwise Kolmogorov-Smirnov test statistics:\n', ks_statistics
+    print 'Pairwise Kolmogorov-Smirnov p-values:\n', p_vals
+    print 'Group names:\n', data_by_borough.groups.keys()
+    
+    
+
+    # # generate exploratory plots
     fig = plt.figure()
     ax = fig.add_subplot(111)
     fs = 36
@@ -72,7 +84,8 @@ def analyze_data():
     for i, (borough_name, borough) in enumerate(data_by_borough):
         nincidents_in_borough = borough.shape[0]
         hourly_incidents = borough.groupby(borough['incident_date_time'].map(lambda t: t.hour))
-        incident_freq_by_borough[i]  = hourly_incidents.size().values.astype(float)/nincidents_in_borough
+        his = hourly_incidents.size()
+        incident_freq_by_borough[i,his.index]  = his.values.astype(float)/nincidents_in_borough
         ax.plot(np.arange(1,25), incident_freq_by_borough[i], label=borough_name)
 
     ax.legend(fontsize=fs, loc='upper left')
